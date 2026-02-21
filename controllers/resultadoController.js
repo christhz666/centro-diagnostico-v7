@@ -6,6 +6,30 @@ const Factura = require('../models/Factura');
 // Estados de pago constantes
 const ESTADOS_PAGO_PENDIENTE = ['borrador', 'emitida'];
 
+
+const PLANTILLAS_REPORTE_IMAGEN = {
+    radiografia_general: {
+        id: 'radiografia_general',
+        nombre: 'Radiografía General',
+        secciones: ['Tecnica', 'Hallazgos', 'Impresion diagnostica', 'Recomendaciones']
+    },
+    torax: {
+        id: 'torax',
+        nombre: 'Radiografía de Tórax',
+        secciones: ['Tecnica', 'Hallazgos pulmonares', 'Cardiomediastino', 'Impresion diagnostica']
+    },
+    extremidades: {
+        id: 'extremidades',
+        nombre: 'Radiografía de Extremidades',
+        secciones: ['Proyecciones', 'Hallazgos oseos', 'Partes blandas', 'Impresion diagnostica']
+    },
+    mamografia: {
+        id: 'mamografia',
+        nombre: 'Mamografía',
+        secciones: ['Composicion mamaria', 'Hallazgos', 'Clasificacion BI-RADS', 'Recomendaciones']
+    }
+};
+
 // @desc    Obtener resultados (con filtros)
 // @route   GET /api/resultados
 exports.getResultados = async (req, res, next) => {
@@ -503,6 +527,181 @@ exports.getResultadosPorFactura = async (req, res, next) => {
             paciente: factura.paciente,
             count: resultados.length,
             data: resultados
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+
+// @desc    Obtener plantillas de reportes para imagenología
+// @route   GET /api/resultados/imagenologia/plantillas
+exports.getPlantillasImagenologia = async (req, res, next) => {
+    try {
+        res.json({ success: true, data: Object.values(PLANTILLAS_REPORTE_IMAGEN) });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Obtener área de trabajo de imagenología (visor + reporte)
+// @route   GET /api/resultados/:id/imagenologia
+exports.getWorkspaceImagenologia = async (req, res, next) => {
+    try {
+        const resultado = await Resultado.findById(req.params.id)
+            .populate('paciente', 'nombre apellido cedula fechaNacimiento sexo')
+            .populate('estudio', 'nombre codigo categoria');
+
+        if (!resultado) {
+            return res.status(404).json({ success: false, message: 'Resultado no encontrado' });
+        }
+
+        const imagenologia = resultado.imagenologia || {};
+        const reporte = imagenologia.reporte || {};
+
+        res.json({
+            success: true,
+            data: {
+                resultadoId: resultado._id,
+                paciente: resultado.paciente,
+                estudio: resultado.estudio,
+                visor: {
+                    archivos: resultado.archivos || [],
+                    dicom: imagenologia.dicom || {},
+                    ajustes: imagenologia.ajustesVisor || { brillo: 1, contraste: 1, zoom: 1, invertido: false }
+                },
+                reporte: {
+                    ...reporte,
+                    plantillaDisponible: PLANTILLAS_REPORTE_IMAGEN[reporte.plantilla || 'radiografia_general']
+                },
+                impresion: {
+                    permitido: resultado.estado !== 'anulado',
+                    vecesImpreso: resultado.vecesImpreso || 0
+                }
+            }
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Guardar ajustes del visor y reporte de imagenología
+// @route   PUT /api/resultados/:id/imagenologia
+exports.updateWorkspaceImagenologia = async (req, res, next) => {
+    try {
+        const payload = req.body || {};
+        const imagenologia = payload.imagenologia || {};
+
+        const update = {};
+        if (imagenologia.ajustesVisor) update['imagenologia.ajustesVisor'] = imagenologia.ajustesVisor;
+        if (imagenologia.reporte) {
+            if (!imagenologia.reporte.fecha_reporte) {
+                imagenologia.reporte.fecha_reporte = new Date();
+            }
+            update['imagenologia.reporte'] = imagenologia.reporte;
+        }
+        if (imagenologia.dicom) update['imagenologia.dicom'] = imagenologia.dicom;
+
+        const resultado = await Resultado.findByIdAndUpdate(req.params.id, { $set: update }, { new: true })
+            .populate('paciente', 'nombre apellido cedula')
+            .populate('estudio', 'nombre codigo');
+
+        if (!resultado) {
+            return res.status(404).json({ success: false, message: 'Resultado no encontrado' });
+        }
+
+        res.json({ success: true, message: 'Workspace de imagenología actualizado', data: resultado.imagenologia || {} });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Obtener payload para integración de registro en equipos (Konica Minolta)
+// @route   GET /api/resultados/integraciones/konica/:citaId
+exports.getPayloadKonica = async (req, res, next) => {
+    try {
+        const cita = await Cita.findById(req.params.citaId)
+            .populate('paciente', 'nombre apellido cedula sexo fechaNacimiento telefono')
+            .populate('estudios.estudio', 'nombre codigo categoria');
+
+        if (!cita) {
+            return res.status(404).json({ success: false, message: 'Cita no encontrada' });
+        }
+
+        const estudiosRx = (cita.estudios || []).filter(item => {
+            const e = item.estudio;
+            if (!e) return false;
+            const texto = `${e.nombre || ''} ${e.categoria || ''} ${e.codigo || ''}`.toLowerCase();
+            return texto.includes('rayo') || texto.includes('radiograf') || texto.includes('rx');
+        });
+
+        if (!estudiosRx.length) {
+            return res.status(400).json({ success: false, message: 'La cita no contiene estudios de rayos X/radiografía' });
+        }
+
+        const pac = cita.paciente;
+        const fechaNacimiento = pac?.fechaNacimiento ? new Date(pac.fechaNacimiento).toISOString().slice(0,10) : null;
+
+        res.json({
+            success: true,
+            data: {
+                tipoIntegracion: 'konica_minolta_autofill',
+                registro: {
+                    accessionNumber: cita.registroId,
+                    patientId: pac?._id,
+                    patientName: `${pac?.apellido || ''}, ${pac?.nombre || ''}`.trim(),
+                    patientSex: pac?.sexo || '',
+                    patientBirthDate: fechaNacimiento,
+                    patientCedula: pac?.cedula || '',
+                    patientPhone: pac?.telefono || '',
+                    scheduledProcedureStepDescription: estudiosRx.map(e => e.estudio?.nombre).join(' | '),
+                    referringPhysicianName: '',
+                    modality: 'CR',
+                    stationName: 'KONICA_MINOLTA'
+                },
+                instrucciones: 'Enviar este payload al conector local de la PC de radiografía para autocompletar el formulario del equipo.'
+            }
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+// @desc    Diagnóstico rápido de carpeta DICOM y Orthanc
+// @route   GET /api/resultados/integraciones/dicom-diagnostico
+exports.diagnosticoDicom = async (req, res, next) => {
+    try {
+        const fs = require('fs');
+        const path = require('path');
+        const candidatos = [
+            process.env.DICOM_FOLDER,
+            path.join(process.cwd(), 'uploads', 'dicom'),
+            '/home/opc/centro-diagnostico/uploads/dicom',
+            '/var/lib/orthanc/db'
+        ].filter(Boolean);
+
+        const carpetas = candidatos.map((dir) => {
+            let existe = false;
+            let archivosDicom = 0;
+            try {
+                existe = fs.existsSync(dir);
+                if (existe) {
+                    const entries = fs.readdirSync(dir);
+                    archivosDicom = entries.filter((n) => n.toLowerCase().endsWith('.dcm')).length;
+                }
+            } catch (e) {
+                return { ruta: dir, existe: false, error: e.message };
+            }
+            return { ruta: dir, existe, archivosDicom };
+        });
+
+        res.json({
+            success: true,
+            orthanc: {
+                url: process.env.ORTHANC_URL || 'http://localhost:8042',
+                aet: process.env.ORTHANC_AET || 'ORTHANC'
+            },
+            carpetas
         });
     } catch (error) {
         next(error);

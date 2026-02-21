@@ -82,6 +82,38 @@ const resultadoSchema = new mongoose.Schema({
         tipo: String,
         tamaño: Number
     }],
+
+    // Datos de imagenología (visor DICOM + reporte médico)
+    imagenologia: {
+        ajustesVisor: {
+            brillo: { type: Number, default: 1 },
+            contraste: { type: Number, default: 1 },
+            zoom: { type: Number, default: 1 },
+            ventanaCentro: Number,
+            ventanaAncho: Number,
+            invertido: { type: Boolean, default: false }
+        },
+        reporte: {
+            plantilla: {
+                type: String,
+                enum: ['radiografia_general', 'torax', 'extremidades', 'mamografia', 'personalizada'],
+                default: 'radiografia_general'
+            },
+            hallazgos: { type: String, trim: true },
+            impresion_diagnostica: { type: String, trim: true },
+            recomendaciones: { type: String, trim: true },
+            tecnico: { type: String, trim: true },
+            medico_firmante: { type: String, trim: true },
+            fecha_reporte: Date
+        },
+        dicom: {
+            studyInstanceUID: String,
+            seriesInstanceUID: String,
+            sopInstanceUID: String,
+            rutaArchivo: String,
+            orthancStudyId: String
+        }
+    },
     
     // Control
     realizadoPor: {

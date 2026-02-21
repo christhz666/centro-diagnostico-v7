@@ -15,13 +15,21 @@ router.get("/:codigo", async (req, res) => {
       });
     }
 
+    const baseUrl = process.env.PUBLIC_API_URL || `${req.protocol}://${req.get('host')}`;
+    const resultadosUrl = `${baseUrl}/api/resultados/qr/${factura.codigoQR}`;
+
+    if (req.query.redirect === 'resultados') {
+      return res.redirect(resultadosUrl);
+    }
+
     res.json({
       valido: true,
       codigo: factura.codigoQR,
       numeroFactura: factura.numero,
       paciente: factura.datosCliente?.nombre || factura.paciente?.nombre,
       total: factura.total,
-      fecha: factura.createdAt
+      fecha: factura.createdAt,
+      resultadosUrl
     });
   } catch (error) {
     res.status(500).json({ error: "Error interno" });

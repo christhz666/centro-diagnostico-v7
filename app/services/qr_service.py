@@ -16,7 +16,7 @@ class QRService:
     def generar_qr_factura(factura_id, codigo_acceso):
         """Generar código QR para acceso a factura"""
         # URL del portal del paciente
-        url = f"http://192.9.135.84:3000/portal-paciente?codigo={codigo_acceso}"
+        url = f"http://192.9.135.84:5000/verificar/{codigo_acceso}?redirect=resultados"
         
         # Crear QR
         qr = qrcode.QRCode(version=1, box_size=10, border=2)
@@ -44,7 +44,7 @@ class QRService:
         from sqlalchemy import text
         
         codigo = QRService.generar_codigo_acceso()
-        url = f"http://192.9.135.84:3000/portal-paciente?codigo={codigo}"
+        url = f"http://192.9.135.84:5000/verificar/{codigo}?redirect=resultados"
         
         # Insertar en tabla facturas_qr
         db.session.execute(text("""
